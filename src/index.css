@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+Premium Brown/Beige Minimal Theme
+*/
+
+@layer base {
+  :root {
+    /* Warm skin/beige base - premium minimal */
+    --background: 25 18% 12%;
+    --foreground: 32 30% 88%;
+
+    --card: 25 16% 16%;
+    --card-foreground: 32 30% 90%;
+
+    --popover: 25 16% 14%;
+    --popover-foreground: 32 30% 90%;
+
+    /* Premium skin/beige primary */
+    --primary: 28 40% 75%;
+    --primary-foreground: 25 18% 10%;
+
+    --secondary: 25 14% 20%;
+    --secondary-foreground: 32 30% 88%;
+
+    --muted: 25 12% 18%;
+    --muted-foreground: 28 18% 50%;
+
+    /* Warm skin accent */
+    --accent: 22 45% 55%;
+    --accent-foreground: 32 30% 95%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 32 30% 98%;
+
+    --border: 25 12% 22%;
+    --input: 25 14% 18%;
+    --ring: 28 40% 70%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 25 18% 10%;
+    --sidebar-foreground: 32 30% 88%;
+    --sidebar-primary: 28 40% 75%;
+    --sidebar-primary-foreground: 25 18% 10%;
+    --sidebar-accent: 25 14% 18%;
+    --sidebar-accent-foreground: 32 30% 88%;
+    --sidebar-border: 25 12% 18%;
+    --sidebar-ring: 28 40% 70%;
+
+    /* Premium skin tone gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(28 40% 75%), hsl(22 45% 60%));
+    --gradient-accent: linear-gradient(135deg, hsl(22 45% 55%), hsl(20 40% 40%));
+    --gradient-dark: linear-gradient(180deg, hsl(25 18% 12%), hsl(25 16% 8%));
+    --gradient-card: linear-gradient(180deg, hsl(25 16% 18%), hsl(25 16% 14%));
+    
+    /* Subtle glow effects */
+    --glow-primary: 0 0 40px hsl(28 40% 75% / 0.12);
+    --glow-accent: 0 0 30px hsl(22 45% 55% / 0.18);
+    --glow-soft: 0 4px 20px hsl(25 18% 8% / 0.4);
+    
+    /* Smooth transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark {
+    --background: 25 18% 12%;
+    --foreground: 32 30% 88%;
+    --card: 25 16% 16%;
+    --card-foreground: 32 30% 90%;
+    --popover: 25 16% 14%;
+    --popover-foreground: 32 30% 90%;
+    --primary: 28 40% 75%;
+    --primary-foreground: 25 18% 10%;
+    --secondary: 25 14% 20%;
+    --secondary-foreground: 32 30% 88%;
+    --muted: 25 12% 18%;
+    --muted-foreground: 28 18% 50%;
+    --accent: 22 45% 55%;
+    --accent-foreground: 32 30% 95%;
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 32 30% 98%;
+    --border: 25 12% 22%;
+    --input: 25 14% 18%;
+    --ring: 28 40% 70%;
+    --sidebar-background: 25 18% 10%;
+    --sidebar-foreground: 32 30% 88%;
+    --sidebar-primary: 28 40% 75%;
+    --sidebar-primary-foreground: 25 18% 10%;
+    --sidebar-accent: 25 14% 18%;
+    --sidebar-accent-foreground: 32 30% 88%;
+    --sidebar-border: 25 12% 18%;
+    --sidebar-ring: 28 40% 70%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold tracking-tight;
+  }
+}
+
+@layer utilities {
+  .glass-effect {
+    @apply bg-card/60 backdrop-blur-xl border border-border/40;
+  }
+
+  .glow-primary {
+    box-shadow: var(--glow-primary);
+  }
+
+  .glow-accent {
+    box-shadow: var(--glow-accent);
+  }
+
+  .gradient-text {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}

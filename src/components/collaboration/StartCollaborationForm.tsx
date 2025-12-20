@@ -1,0 +1,225 @@
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { X, Users, Plus } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+
+interface StartCollaborationFormProps {
+  onRoomCreated: (roomId: string, username: string) => void;
+}
+
+export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationFormProps) => {
+  const [username, setUsername] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const addEmail = () => {
+    if (!inviteEmail.trim()) return;
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteEmail)) {
+      toast.error('Please enter a valid email');
+      return;
+    }
+
+    if (invitedEmails.includes(inviteEmail)) {
+      toast.error('Email already added');
+      return;
+    }
+
+    if (invitedEmails.length >= 3) {
+      toast.error('Max 3 invites allowed');
+      return;
+    }
+
+    setInvitedEmails([...invitedEmails, inviteEmail]);
+    setInviteEmail('');
+  };
+
+  const removeEmail = (email: string) => {
+    setInvitedEmails(invitedEmails.filter((e) => e !== email));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!username.trim() || !projectName.trim()) {
+      toast.error('All fields required');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return toast.error("You must be logged in.");
+
+      const { data: room, error: roomError } = await supabase
+        .from("collaboration_rooms")
+        .insert({
+          name: projectName,
+          owner_id: user.id
+        })
+        .select()
+        .single();
+
+      if (roomError) throw roomError;
+
+      await supabase.from("collaboration_members").insert({
+        room_id: room.id,
+        user_id: user.id,
+        username: username
+      });
+
+      for (const email of invitedEmails) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("email", email)
+          .single();
+
+        await supabase.from("collaboration_invitations").insert({
+          room_id: room.id,
+          inviter_id: user.id,
+          invitee_email: email,
+          invitee_id: profile?.id || null
+        });
+      }
+
+      toast.success("Room created!");
+      onRoomCreated(room.id, username);
+
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Failed to create room");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Card
+      className="
+        w-full max-w-md mx-auto 
+        bg-[#FAF3EB]/80 
+        border border-[#E8D8C8]
+        shadow-xl 
+        rounded-2xl 
+        backdrop-blur-xl
+      "
+    >
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-[#4A382C] text-2xl font-semibold">
+          <Users className="h-5 w-5 text-[#6A4A3C]" />
+          Start Collaboration
+        </CardTitle>
+
+        <CardDescription className="text-[#7A6A5C]">
+          Create a collaboration room and invite up to 3 users
+        </CardDescription>
+      </CardHeader>
+
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-6">
+
+          {/* USERNAME */}
+          <div className="space-y-2">
+            <Label className="text-[#4A382C]">Your Username</Label>
+            <Input
+              placeholder="Enter your display name"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="
+                bg-white border-[#D8C6B5]
+                text-[#3B2A21] rounded-xl
+                focus-visible:ring-[#6A4A3C]
+              "
+            />
+          </div>
+
+          {/* PROJECT NAME */}
+          <div className="space-y-2">
+            <Label className="text-[#4A382C]">Project Name</Label>
+            <Input
+              placeholder="Enter project name"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              className="
+                bg-white border-[#D8C6B5]
+                text-[#3B2A21] rounded-xl
+                focus-visible:ring-[#6A4A3C]
+              "
+            />
+          </div>
+
+          {/* INVITES */}
+          <div className="space-y-2">
+            <Label className="text-[#4A382C]">Invite Users (Optional)</Label>
+            <div className="flex gap-2">
+              <Input
+                type="email"
+                placeholder="Enter email address"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addEmail())}
+                className="
+                  bg-white border-[#D8C6B5]
+                  text-[#3B2A21] rounded-xl
+                  focus-visible:ring-[#6A4A3C]
+                "
+              />
+
+              <Button
+                type="button"
+                onClick={addEmail}
+                className="bg-[#6A4A3C] text-white rounded-xl shadow"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* EMAIL BADGES */}
+          {invitedEmails.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {invitedEmails.map((email) => (
+                <Badge
+                  key={email}
+                  className="
+                    bg-[#E8D6C5] text-[#4A382C] 
+                    rounded-lg px-3 py-1
+                    flex items-center gap-1
+                  "
+                >
+                  {email}
+                  <button onClick={() => removeEmail(email)} type="button">
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          {/* SUBMIT */}
+          <Button
+            type="submit"
+            disabled={isLoading}
+            className="
+              w-full py-3 
+              bg-gradient-to-br from-[#6A4A3C] to-[#4A3328]
+              text-white rounded-xl
+              shadow-lg text-md
+            "
+          >
+            {isLoading ? "Creating..." : "Start Collaboration"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+};

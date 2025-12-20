@@ -1,0 +1,16 @@
+project_id = "dynrbmftzgvtciwtjxab"
+
+[functions.ai-chat]
+verify_jwt = true
+
+[functions.generate-image]
+verify_jwt = true
+
+[functions.generate-video]
+verify_jwt = true
+
+[functions.ai-code]
+verify_jwt = true
+
+[functions.collaboration-ai]
+verify_jwt = true
