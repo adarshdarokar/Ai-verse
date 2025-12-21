@@ -16,7 +16,6 @@ const Auth = () => {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
 
-  /* ---------------- LOGIN IF ALREADY AUTHENTICATED ---------------- */
   useEffect(() => {
     const check = async () => {
       const { data } = await supabase.auth.getSession();
@@ -33,14 +32,12 @@ const Auth = () => {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
-  /* --------------------------- SIGNUP / LOGIN --------------------------- */
   const handleAuth = async (e) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
       if (isSignUp) {
-        /* ---------- SIGNUP ---------- */
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -52,23 +49,17 @@ const Auth = () => {
 
         if (error) return toast.error(error.message);
 
-        // AUTO LOGIN AFTER SIGNUP
         await supabase.auth.signInWithPassword({ email, password });
-
-        toast.success("Account created! Redirecting...");
+        toast.success("Account created!");
         navigate("/dashboard");
-
       } else {
-        /* ---------- LOGIN ---------- */
         const { error } = await supabase.auth.signInWithPassword({ email, password });
-
         if (error) return toast.error(error.message);
 
         toast.success("Signed in successfully!");
         navigate("/dashboard");
       }
-    } catch (err) {
-      console.log(err);
+    } catch {
       toast.error("Something went wrong");
     } finally {
       setIsLoading(false);
@@ -76,51 +67,38 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-screen grid grid-cols-1 md:grid-cols-2">
+    <div className="min-h-screen grid grid-cols-1 md:grid-cols-2 overflow-hidden font-sans">
 
-      {/* LEFT SIDE */}
-      <div
-        className="
-          hidden md:flex flex-col justify-center p-16
-          bg-gradient-to-b from-[#7A5646] via-[#604437] to-[#4A332B]
-          text-left text-[#F7F1EB]
-        "
-      >
-        <h1 className="text-5xl font-serif tracking-wide font-bold mb-4">
-          Welcome to AI-Verse
-        </h1>
-
-        <p className="text-lg opacity-90 max-w-md">
-          Your premium AI workspace with luxury aesthetics and a smooth user experience.
-        </p>
+      {/* LEFT — SAME GRADIENT AS HOME */}
+      <div className="hidden md:flex items-center justify-center px-16 bg-gradient-to-b from-[#b08a72] via-[#8a614b] to-[#3a241b]">
+        <div className="text-center text-[#fff6ef] space-y-4">
+          <h1 className="text-5xl font-semibold tracking-wide">
+            Welcome to AI-Verse
+          </h1>
+          <p className="text-lg opacity-90">
+            Think. Create. Collaborate. Repeat.
+          </p>
+        </div>
       </div>
 
-      {/* RIGHT SIDE */}
-      <div
-        className="
-          flex items-center justify-center p-6
-          bg-[radial-gradient(circle_at_50%_45%,#DAC8B8_0%,#E8DCD1_40%,#F3EBE3_100%)]
-          relative
-        "
-      >
-        <div className="absolute top-32 -left-10 w-80 h-80 bg-[#CDB8A6]/40 blur-[150px] rounded-full"></div>
+      {/* RIGHT — SAME BEIGE AS HOME */}
+      <div className="flex items-center justify-center px-6 bg-gradient-to-b from-[#f6eee6] via-[#efe3d6] to-[#e2d1bf]">
 
         <Card
           className="
-            w-full max-w-md relative z-10 
-            bg-[#FAF4EE]/85 backdrop-blur-xl 
-            border border-[#E6D8C9]
-            shadow-[0px_18px_45px_rgba(0,0,0,0.10)]
+            w-full max-w-md
+            bg-[#fbf6f1]/95
+            border border-[#e2d2c3]
             rounded-3xl
+            shadow-[0_20px_45px_rgba(160,110,70,0.25)]
           "
         >
-          <CardHeader className="text-center space-y-1 pt-6">
-            <h2 className="text-[28px] font-serif tracking-wide text-[#3E2C24] font-medium">
+          <CardHeader className="text-center pt-8 space-y-1">
+            <h2 className="text-[28px] font-semibold tracking-wide text-[#3a241b]">
               {isSignUp ? "Create your account" : "Welcome back"}
             </h2>
-
-            <CardDescription className="text-[#8A6B58] text-sm tracking-wide opacity-90">
-              {isSignUp ? "Start your journey with us." : "Sign in to continue >"}
+            <CardDescription className="text-[#8a6b58] text-sm tracking-wide">
+              {isSignUp ? "Start your journey with us." : "Sign in to continue"}
             </CardDescription>
           </CardHeader>
 
@@ -129,62 +107,50 @@ const Auth = () => {
 
               {isSignUp && (
                 <div className="space-y-2">
-                  <Label className="text-[#3E2C24] font-medium">Full Name</Label>
+                  <Label className="text-[#3a241b] font-medium">Full Name</Label>
                   <Input
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="John Doe"
                     required
-                    className="
-                      bg-[#F2E7DD] border-[#D6C6B9] text-[#3E2C24]
-                      rounded-xl shadow-sm placeholder:text-[#A58F7F]
-                      focus:border-[#BFA48F] focus:ring-[#BFA48F]
-                    "
+                    className="bg-[#f3eae1] border-[#d8c8ba] text-[#3a241b] rounded-xl"
                   />
                 </div>
               )}
 
               <div className="space-y-2">
-                <Label className="text-[#3E2C24] font-medium">Email</Label>
+                <Label className="text-[#3a241b] font-medium">Email</Label>
                 <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   required
-                  className="
-                    bg-[#F2E7DD] border-[#D6C6B9] text-[#3E2C24]
-                    rounded-xl shadow-sm placeholder:text-[#A58F7F]
-                    focus:border-[#BFA48F] focus:ring-[#BFA48F]
-                  "
+                  className="bg-[#f3eae1] border-[#d8c8ba] text-[#3a241b] rounded-xl"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-[#3E2C24] font-medium">Password</Label>
+                <Label className="text-[#3a241b] font-medium">Password</Label>
                 <Input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  className="
-                    bg-[#F2E7DD] border-[#D6C6B9] text-[#3E2C24]
-                    rounded-xl shadow-sm placeholder:text-[#A58F7F]
-                    focus:border-[#BFA48F] focus:ring-[#BFA48F]
-                  "
+                  className="bg-[#f3eae1] border-[#d8c8ba] text-[#3a241b] rounded-xl"
                 />
               </div>
 
               <Button
                 type="submit"
+                disabled={isLoading}
                 className="
                   w-full py-3 text-lg font-semibold
-                  bg-gradient-to-r from-[#AF8A6D] to-[#916C52]
-                  hover:opacity-90 text-white rounded-2xl
-                  shadow-[0_4px_15px_rgba(0,0,0,0.18)]
+                  text-white rounded-2xl
+                  bg-gradient-to-r from-[#c1936d] via-[#b8845f] to-[#9e6b48]
+                  shadow-[0_24px_50px_-12px_rgba(160,110,70,0.85)]
                 "
-                disabled={isLoading}
               >
                 {isLoading ? (
                   <>
@@ -192,7 +158,7 @@ const Auth = () => {
                     {isSignUp ? "Creating..." : "Signing in..."}
                   </>
                 ) : (
-                  <>{isSignUp ? "Create Account" : "Sign In"}</>
+                  isSignUp ? "Create Account" : "Sign In"
                 )}
               </Button>
             </form>
@@ -200,9 +166,11 @@ const Auth = () => {
             <div className="mt-6 text-center">
               <button
                 onClick={() => setIsSignUp(!isSignUp)}
-                className="text-sm text-[#7D5F4A] hover:text-[#3E2C24] transition-all"
+                className="text-sm text-[#7a5140] hover:text-[#3a241b] transition"
               >
-                {isSignUp ? "Already have an account? Sign in" : "Don’t have an account? Sign up"}
+                {isSignUp
+                  ? "Already have an account? Sign in"
+                  : "Don’t have an account? Sign up"}
               </button>
             </div>
           </CardContent>
