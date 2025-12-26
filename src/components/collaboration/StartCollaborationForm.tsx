@@ -2,7 +2,13 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { X, Users, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -12,22 +18,26 @@ interface StartCollaborationFormProps {
   onRoomCreated: (roomId: string, username: string) => void;
 }
 
-export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationFormProps) => {
+export const StartCollaborationForm = ({
+  onRoomCreated,
+}: StartCollaborationFormProps) => {
   const [username, setUsername] = useState('');
   const [projectName, setProjectName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  /* ---------------- ADD EMAIL ---------------- */
   const addEmail = () => {
-    if (!inviteEmail.trim()) return;
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteEmail)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       toast.error('Please enter a valid email');
       return;
     }
 
-    if (invitedEmails.includes(inviteEmail)) {
+    if (invitedEmails.includes(email)) {
       toast.error('Email already added');
       return;
     }
@@ -37,14 +47,15 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
       return;
     }
 
-    setInvitedEmails([...invitedEmails, inviteEmail]);
+    setInvitedEmails((prev) => [...prev, email]);
     setInviteEmail('');
   };
 
   const removeEmail = (email: string) => {
-    setInvitedEmails(invitedEmails.filter((e) => e !== email));
+    setInvitedEmails((prev) => prev.filter((e) => e !== email));
   };
 
+  /* ---------------- SUBMIT ---------------- */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -56,52 +67,75 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
     setIsLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return toast.error("You must be logged in.");
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
+      if (!user) {
+        toast.error('You must be logged in.');
+        return;
+      }
+
+      /* CREATE ROOM */
       const { data: room, error: roomError } = await supabase
-        .from("collaboration_rooms")
+        .from('collaboration_rooms')
         .insert({
           name: projectName,
-          owner_id: user.id
+          owner_id: user.id,
         })
         .select()
         .single();
 
       if (roomError) throw roomError;
 
-      await supabase.from("collaboration_members").insert({
+      /* ADD OWNER AS MEMBER */
+      await supabase.from('collaboration_members').insert({
         room_id: room.id,
         user_id: user.id,
-        username: username
+        username: username,
       });
 
+      /* SEND INVITES (SAFE) */
       for (const email of invitedEmails) {
+        const safeEmail = email.toLowerCase();
+
+        // 🛑 duplicate pending invite guard
+        const { data: existing } = await supabase
+          .from('collaboration_invitations')
+          .select('id')
+          .eq('room_id', room.id)
+          .eq('invitee_email', safeEmail)
+          .eq('status', 'pending')
+          .maybeSingle();
+
+        if (existing) continue;
+
         const { data: profile } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("email", email)
+          .from('profiles')
+          .select('id')
+          .eq('email', safeEmail)
           .single();
 
-        await supabase.from("collaboration_invitations").insert({
+        await supabase.from('collaboration_invitations').insert({
           room_id: room.id,
           inviter_id: user.id,
-          invitee_email: email,
-          invitee_id: profile?.id || null
+          invitee_email: safeEmail,
+          invitee_id: profile?.id || null,
+          status: 'pending',
         });
       }
 
-      toast.success("Room created!");
+      toast.success('Room created!');
       onRoomCreated(room.id, username);
-
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      toast.error("Failed to create room");
+      toast.error('Failed to create room');
     } finally {
       setIsLoading(false);
     }
   };
 
+  /* ---------------- UI (UNCHANGED) ---------------- */
   return (
     <Card
       className="
@@ -126,7 +160,6 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
 
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6">
-
           {/* USERNAME */}
           <div className="space-y-2">
             <Label className="text-[#4A382C]">Your Username</Label>
@@ -166,7 +199,9 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
                 placeholder="Enter email address"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addEmail())}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' && (e.preventDefault(), addEmail())
+                }
                 className="
                   bg-white border-[#D8C6B5]
                   text-[#3B2A21] rounded-xl
@@ -197,7 +232,10 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
                   "
                 >
                   {email}
-                  <button onClick={() => removeEmail(email)} type="button">
+                  <button
+                    onClick={() => removeEmail(email)}
+                    type="button"
+                  >
                     <X className="h-3 w-3" />
                   </button>
                 </Badge>
@@ -216,7 +254,7 @@ export const StartCollaborationForm = ({ onRoomCreated }: StartCollaborationForm
               shadow-lg text-md
             "
           >
-            {isLoading ? "Creating..." : "Start Collaboration"}
+            {isLoading ? 'Creating...' : 'Start Collaboration'}
           </Button>
         </form>
       </CardContent>

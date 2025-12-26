@@ -40,32 +40,26 @@ export const InvitationNotification = ({ onAccept }: Props) => {
 
       const user = data.user;
 
-      // ✅ 1. By invitee_id
       const { data: byId } = await supabase
         .from("collaboration_invitations")
-        .select(
-          `
+        .select(`
           id,
           room_id,
           inviter_id,
           collaboration_rooms ( name )
-        `
-        )
+        `)
         .eq("invitee_id", user.id)
         .eq("status", "pending");
 
-      // ✅ 2. By invitee_email (ONLY if email exists)
       const { data: byEmail } = user.email
         ? await supabase
             .from("collaboration_invitations")
-            .select(
-              `
+            .select(`
               id,
               room_id,
               inviter_id,
               collaboration_rooms ( name )
-            `
-            )
+            `)
             .eq("invitee_email", user.email.toLowerCase())
             .eq("status", "pending")
         : { data: [] };
@@ -110,6 +104,7 @@ export const InvitationNotification = ({ onAccept }: Props) => {
       if (!data?.user) return;
 
       const user = data.user;
+      const email = user.email?.toLowerCase();
 
       channel = supabase
         .channel(`invite-realtime-${user.id}`)
@@ -125,18 +120,11 @@ export const InvitationNotification = ({ onAccept }: Props) => {
 
             const emailMatch =
               inv.invitee_email &&
-              user.email &&
-              inv.invitee_email.toLowerCase() ===
-                user.email.toLowerCase();
+              email &&
+              inv.invitee_email.toLowerCase() === email;
 
             const idMatch = inv.invitee_id === user.id;
             if (!emailMatch && !idMatch) return;
-
-            // 🛑 duplicate guard
-            setInvites((prev) => {
-              if (prev.some((x) => x.id === inv.id)) return prev;
-              return prev;
-            });
 
             const [{ data: room }, { data: inviter }] = await Promise.all([
               supabase
@@ -151,19 +139,22 @@ export const InvitationNotification = ({ onAccept }: Props) => {
                 .single(),
             ]);
 
-            setInvites((prev) => [
-              {
-                id: inv.id,
-                room_id: inv.room_id,
-                inviter_id: inv.inviter_id,
-                room_name: room?.name || "Room",
-                inviter_name:
-                  inviter?.full_name ||
-                  inviter?.email?.split("@")[0] ||
-                  "Someone",
-              },
-              ...prev,
-            ]);
+            const inviteObj: Invitation = {
+              id: inv.id,
+              room_id: inv.room_id,
+              inviter_id: inv.inviter_id,
+              room_name: room?.name || "Room",
+              inviter_name:
+                inviter?.full_name ||
+                inviter?.email?.split("@")[0] ||
+                "Someone",
+            };
+
+            setInvites((prev) =>
+              prev.some((x) => x.id === inviteObj.id)
+                ? prev
+                : [inviteObj, ...prev]
+            );
 
             toast.info("New collaboration invite");
           }
@@ -191,14 +182,19 @@ export const InvitationNotification = ({ onAccept }: Props) => {
           .eq("id", data.user.id)
           .single();
 
-        await supabase.from("collaboration_members").upsert({
-          room_id: inv.room_id,
-          user_id: data.user.id,
-          username:
-            profile?.full_name ||
-            profile?.email?.split("@")[0] ||
-            "User",
-        });
+        await supabase
+          .from("collaboration_members")
+          .upsert(
+            {
+              room_id: inv.room_id,
+              user_id: data.user.id,
+              username:
+                profile?.full_name ||
+                profile?.email?.split("@")[0] ||
+                "User",
+            },
+            { onConflict: ["room_id", "user_id"] }
+          );
       }
 
       await supabase
@@ -211,8 +207,8 @@ export const InvitationNotification = ({ onAccept }: Props) => {
       accept
         ? (toast.success("Joined room"), onAccept(inv.room_id))
         : toast.info("Invite declined");
-    } catch {
-      toast.error("Action failed");
+    } catch (err: any) {
+      toast.error(err?.message || "Action failed");
     } finally {
       setLoadingId(null);
     }

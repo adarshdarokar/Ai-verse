@@ -16,6 +16,7 @@ import {
 /* ---------------------- Invite Modal ---------------------- */
 const InviteModal = ({ open, onClose, onSend, loading }) => {
   const [email, setEmail] = useState("");
+
   useEffect(() => {
     if (!open) setEmail("");
   }, [open]);
@@ -40,12 +41,15 @@ const InviteModal = ({ open, onClose, onSend, loading }) => {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="name@example.com"
-          className="w-full px-4 py-2 rounded-md border border-[#D8C0A8] 
-                     bg-white/90 text-[#3A2A22] mb-4"
+          className="w-full px-4 py-2 rounded-md border border-[#D8C0A8] bg-white/90 text-[#3A2A22] mb-4"
         />
 
         <div className="flex gap-2 justify-end">
-          <Button variant="outline" onClick={onClose} className="bg-white/80 text-[#4A382C]">
+          <Button
+            variant="outline"
+            onClick={onClose}
+            className="bg-white/80 text-[#4A382C]"
+          >
             Cancel
           </Button>
           <Button
@@ -62,13 +66,21 @@ const InviteModal = ({ open, onClose, onSend, loading }) => {
 };
 
 /* ---------------------- Notification Dropdown ---------------------- */
-const NotificationDropdown = ({ open, invites, onAccept, onDecline, onClose }) => {
+const NotificationDropdown = ({
+  open,
+  invites,
+  onAccept,
+  onDecline,
+  onClose,
+}) => {
   if (!open) return null;
 
   return (
     <div className="absolute right-0 mt-2 w-80 z-50 bg-[#F7EFE7] rounded-xl shadow-2xl border border-[#CBBBAA] p-3">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-[#3A2B22]">Notifications</h3>
+        <h3 className="text-sm font-semibold text-[#3A2B22]">
+          Notifications
+        </h3>
         <button onClick={onClose}>
           <X className="h-4 w-4 text-[#4A382C]" />
         </button>
@@ -86,7 +98,9 @@ const NotificationDropdown = ({ open, invites, onAccept, onDecline, onClose }) =
               <p className="text-sm font-medium text-[#3A2B22]">
                 {inv.inviter_name} invited you
               </p>
-              <p className="text-xs text-[#6a5f55]">Room: {inv.room_name}</p>
+              <p className="text-xs text-[#6a5f55]">
+                Room: {inv.room_name}
+              </p>
 
               <div className="flex gap-2 mt-2">
                 <Button
@@ -128,6 +142,21 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef(null);
 
+  /* ------------------ FETCH MEMBERS ------------------ */
+  const fetchMembers = async () => {
+    const { data, error } = await supabase
+      .from("collaboration_members")
+      .select("*")
+      .eq("room_id", roomId);
+
+    if (error) {
+      console.error("fetchMembers error:", error);
+      return;
+    }
+
+    setMembers(data || []);
+  };
+
   /* ------------------ Initial Load ------------------ */
   useEffect(() => {
     const load = async () => {
@@ -142,7 +171,9 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
         .eq("id", auth.user.id)
         .single();
 
-      if (profile?.email) setCurrentUserEmail(profile.email.toLowerCase());
+      if (profile?.email) {
+        setCurrentUserEmail(profile.email.toLowerCase());
+      }
 
       const { data: room } = await supabase
         .from("collaboration_rooms")
@@ -151,16 +182,35 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
         .single();
 
       setRoomInfo(room);
-
-      const { data: membersData } = await supabase
-        .from("collaboration_members")
-        .select("*")
-        .eq("room_id", roomId);
-
-      setMembers(membersData || []);
+      fetchMembers();
     };
 
     load();
+  }, [roomId]);
+
+  /* ------------------ REALTIME MEMBERS LISTENER ------------------ */
+  useEffect(() => {
+    if (!roomId) return;
+
+    const channel = supabase
+      .channel(`members-room-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "collaboration_members",
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          fetchMembers();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [roomId]);
 
   /* ------------------ Load Pending Invites ------------------ */
@@ -181,21 +231,34 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
       const mapped = await Promise.all(
         data.map(async (inv) => {
           const [{ data: room }, { data: inviter }] = await Promise.all([
-            supabase.from("collaboration_rooms").select("name").eq("id", inv.room_id).single(),
-            supabase.from("profiles").select("full_name, email").eq("id", inv.inviter_id).single(),
+            supabase
+              .from("collaboration_rooms")
+              .select("name")
+              .eq("id", inv.room_id)
+              .single(),
+            supabase
+              .from("profiles")
+              .select("full_name,email")
+              .eq("id", inv.inviter_id)
+              .single(),
           ]);
 
           return {
-            id: inv.id,
-            room_id: inv.room_id,
-            inviter_name:
-              inviter?.full_name || inviter?.email?.split("@")[0] || "Someone",
+            ...inv,
             room_name: room?.name || "Room",
+            inviter_name:
+              inviter?.full_name ||
+              inviter?.email?.split("@")[0] ||
+              "Someone",
           };
         })
       );
 
-      setInvites((prev) => [...mapped, ...prev]);
+      setInvites((prev) => {
+        const ids = new Set(prev.map((i) => i.id));
+        const unique = mapped.filter((d) => !ids.has(d.id));
+        return [...unique, ...prev];
+      });
     };
 
     loadPending();
@@ -209,7 +272,11 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
       .channel("invite-insert")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "collaboration_invitations" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "collaboration_invitations",
+        },
         async (payload) => {
           const inv = payload.new;
 
@@ -224,20 +291,34 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
           if (!emailMatch && !idMatch) return;
 
           const [{ data: room }, { data: inviter }] = await Promise.all([
-            supabase.from("collaboration_rooms").select("name").eq("id", inv.room_id).single(),
-            supabase.from("profiles").select("full_name, email").eq("id", inv.inviter_id).single(),
+            supabase
+              .from("collaboration_rooms")
+              .select("name")
+              .eq("id", inv.room_id)
+              .single(),
+            supabase
+              .from("profiles")
+              .select("full_name,email")
+              .eq("id", inv.inviter_id)
+              .single(),
           ]);
 
           const inviteObj = {
-            id: inv.id,
-            room_id: inv.room_id,
-            inviter_name:
-              inviter?.full_name || inviter?.email?.split("@")[0] || "Someone",
+            ...inv,
             room_name: room?.name || "Room",
+            inviter_name:
+              inviter?.full_name ||
+              inviter?.email?.split("@")[0] ||
+              "Someone",
           };
 
-          setInvites((prev) => [inviteObj, ...prev]);
-          toast.info(`Invite from ${inviteObj.inviter_name}`);
+          setInvites((prev) =>
+            prev.some((p) => p.id === inviteObj.id)
+              ? prev
+              : [inviteObj, ...prev]
+          );
+
+          toast.info("New collaboration invite");
         }
       )
       .subscribe();
@@ -255,26 +336,19 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
     try {
       const { data: auth } = await supabase.auth.getUser();
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("email", trimmed);
-
       const payload = {
         room_id: roomId,
         inviter_id: auth.user.id,
+        invitee_email: trimmed,
         status: "pending",
         created_at: new Date().toISOString(),
       };
-
-      if (profile?.length) payload.invitee_id = profile[0].id;
-      else payload.invitee_email = trimmed;
 
       await supabase.from("collaboration_invitations").insert(payload);
 
       toast.success(`Invite sent to ${trimmed}`);
       setInviteOpen(false);
-    } catch (err) {
+    } catch (e) {
       toast.error("Failed to send invite");
     }
 
@@ -285,15 +359,22 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
   const acceptInvite = async (inv) => {
     const { data: auth } = await supabase.auth.getUser();
 
-    await supabase.from("collaboration_members").upsert(
-      {
-        room_id: inv.room_id,
-        user_id: auth.user.id,
-        username: username,
-        joined_at: new Date().toISOString(),
-      },
-      { onConflict: ["room_id", "user_id"] }
-    );
+    const { error } = await supabase
+      .from("collaboration_members")
+      .upsert(
+        {
+          room_id: inv.room_id,
+          user_id: auth.user.id,
+          username,
+          joined_at: new Date().toISOString(),
+        },
+        { onConflict: ["room_id", "user_id"] }
+      );
+
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
     await supabase
       .from("collaboration_invitations")
@@ -349,8 +430,6 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
   /* ------------------ UI ------------------ */
   return (
     <div className="h-screen flex flex-col bg-[#E8DCCF]">
-      
-      {/* Invite Modal */}
       <InviteModal
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
@@ -358,43 +437,25 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
         loading={inviteLoading}
       />
 
-      {/* NAVBAR */}
-      <div
-        className="flex items-center justify-between px-6 py-4 border-b border-[#CBBBAA]
-        bg-gradient-to-r from-[#3A251C] via-[#4A2F23] to-[#2A1A14] text-[#EBD8C8]"
-      >
-        {/* Left */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-[#CBBBAA] bg-gradient-to-r from-[#3A251C] via-[#4A2F23] to-[#2A1A14] text-[#EBD8C8]">
         <div className="flex items-center gap-4">
           <div className="p-2.5 rounded-xl bg-[#4A2F23] border border-[#C7A583]/40">
-            <Users className="h-5 w-5 text-[#EBD8C8]" />
+            <Users className="h-5 w-5" />
           </div>
-
           <div>
-            <h2 className="text-lg font-semibold text-[#F4E8DD]">
-              {roomInfo?.name}
-            </h2>
-            <div className="flex items-center gap-3 text-xs text-[#D6C7B7]">
-              <span className="flex items-center gap-1.5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative h-2 w-2 rounded-full bg-green-500" />
-                </span>
-                {onlineCount} online
-              </span>
-              • {members.length} members
+            <h2 className="text-lg font-semibold">{roomInfo?.name}</h2>
+            <div className="text-xs">
+              {onlineCount} online • {members.length} members
             </div>
           </div>
         </div>
 
-        {/* Right */}
         <div className="flex items-center gap-4 relative" ref={notifRef}>
-          
-          {/* Bell */}
           <button
             onClick={() => setNotifOpen(!notifOpen)}
-            className="relative p-2 rounded-lg bg-[#4A2F23] border border-[#A88C6D]"
+            className="relative p-2 rounded-lg bg-[#4A2F23]"
           >
-            <Bell className="h-5 w-5 text-[#EBD8C8]" />
+            <Bell className="h-5 w-5" />
             {invites.length > 0 && (
               <span className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full text-xs px-1">
                 {invites.length}
@@ -402,7 +463,6 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
             )}
           </button>
 
-          {/* Dropdown */}
           <NotificationDropdown
             open={notifOpen}
             invites={invites}
@@ -411,30 +471,18 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
             onClose={() => setNotifOpen(false)}
           />
 
-          {/* Invite */}
-          <Button
-            size="sm"
-            onClick={() => setInviteOpen(true)}
-            className="bg-[#C7A583] text-[#3A2B22] border border-[#A88C6D]"
-          >
+          <Button size="sm" onClick={() => setInviteOpen(true)}>
             <UserPlus className="h-4 w-4" /> Invite
           </Button>
 
-          {/* Leave */}
-          <Button
-            size="sm"
-            onClick={handleLeave}
-            className="bg-[#B89C7A] text-[#3A2B22] border border-[#A88C6D]"
-          >
+          <Button size="sm" onClick={handleLeave}>
             <LogOut className="h-4 w-4 mr-2" /> Leave
           </Button>
         </div>
       </div>
 
-      {/* Layout */}
       <ResizablePanelGroup direction="horizontal" className="flex-1">
-        
-        <ResizablePanel defaultSize={18} minSize={15} maxSize={25}>
+        <ResizablePanel defaultSize={18}>
           <ActiveUsersList
             members={mergedMembers}
             currentUserId={currentUserId}
@@ -442,18 +490,17 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
           />
         </ResizablePanel>
 
-        <ResizableHandle className="bg-[#CBBBAA]" withHandle />
+        <ResizableHandle withHandle />
 
-        <ResizablePanel defaultSize={50} minSize={35}>
+        <ResizablePanel defaultSize={50}>
           <GroupChat roomId={roomId} username={username} />
         </ResizablePanel>
 
-        <ResizableHandle className="bg-[#CBBBAA]" withHandle />
+        <ResizableHandle withHandle />
 
-        <ResizablePanel defaultSize={32} minSize={25}>
+        <ResizablePanel defaultSize={32}>
           <SharedOutputPanel roomId={roomId} username={username} />
         </ResizablePanel>
-
       </ResizablePanelGroup>
     </div>
   );

@@ -2,103 +2,136 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { message, roomId, context } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    /* ---------- BODY ---------- */
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body" }),
+        { status: 400, headers: corsHeaders }
+      );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { message, roomId, context } = body;
+    if (!message || !roomId) {
+      return new Response(
+        JSON.stringify({ error: "message and roomId are required" }),
+        { status: 400, headers: corsHeaders }
+      );
+    }
 
-    // Get recent chat context
+    /* ---------- ENV ---------- */
+    const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+    if (!OPENROUTER_API_KEY) {
+      throw new Error("OPENROUTER_API_KEY not set");
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    /* ---------- CHAT CONTEXT ---------- */
     const { data: recentMessages } = await supabase
-      .from('collaboration_messages')
-      .select('username, content, is_ai')
-      .eq('room_id', roomId)
-      .order('created_at', { ascending: false })
+      .from("collaboration_messages")
+      .select("username, content, is_ai")
+      .eq("room_id", roomId)
+      .order("created_at", { ascending: false })
       .limit(10);
 
-    const chatContext = recentMessages?.reverse().map(m => 
-      `${m.is_ai ? 'AI Assistant' : m.username}: ${m.content}`
-    ).join('\n') || '';
+    const chatContext =
+      recentMessages
+        ?.reverse()
+        .map(
+          (m) =>
+            `${m.is_ai ? "AI Assistant" : m.username}: ${m.content}`
+        )
+        .join("\n") || "";
 
-    const systemPrompt = `You are an AI coding assistant in a real-time collaboration environment. 
-You help developers with coding questions, debugging, and best practices.
-Keep responses concise but helpful. Use code blocks with language specification when showing code.
-You can see the recent chat history for context.
+    /* ---------- OPENROUTER (FREE MODEL) ---------- */
+    const aiRes = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://ai-verse.app",
+          "X-Title": "AI-Verse Collaboration",
+        },
+        body: JSON.stringify({
+          // ✅ FREE MODEL (NO 402 ERROR)
+          model: "arcee-ai/trinity-mini:free",
+          temperature: 0.6,
+          max_tokens: 500,
+          messages: [
+            {
+              role: "system",
+              content: `You are an AI coding assistant inside a real-time collaboration app.
+Be concise, helpful, friendly and technical when needed.
+Use emojis lightly for clarity 😊
 
 Recent chat:
 ${chatContext}
 
-Additional context provided:
-${context || 'No additional context'}`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: message }
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limits exceeded, please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+Extra context:
+${context || "None"}`,
+            },
+            { role: "user", content: message },
+          ],
+        }),
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Payment required, please add funds." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      throw new Error("AI gateway error");
+    );
+
+    if (!aiRes.ok) {
+      const err = await aiRes.text();
+      console.error("OpenRouter error:", aiRes.status, err);
+
+      return new Response(
+        JSON.stringify({
+          error: "AI provider error",
+          detail: err,
+        }),
+        { status: aiRes.status, headers: corsHeaders }
+      );
     }
 
-    const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content || "I couldn't generate a response.";
+    const aiData = await aiRes.json();
+    const aiResponse =
+      aiData?.choices?.[0]?.message?.content ||
+      "AI could not generate a response.";
 
-    // Save AI response to chat
-    await supabase.from('collaboration_messages').insert({
+    /* ---------- SAVE MESSAGE ---------- */
+    await supabase.from("collaboration_messages").insert({
       room_id: roomId,
       user_id: null,
-      username: 'AI Assistant',
+      username: "AI Assistant",
       content: aiResponse,
-      is_ai: true
+      is_ai: true,
     });
 
-    return new Response(JSON.stringify({ response: aiResponse }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ response: aiResponse }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   } catch (error) {
-    console.error("Collaboration AI error:", error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error("Collaboration AI fatal error:", error);
+
+    return new Response(
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+      { status: 500, headers: corsHeaders }
+    );
   }
 });

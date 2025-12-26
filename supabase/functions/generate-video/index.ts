@@ -1,160 +1,154 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import Replicate from "https://esm.sh/replicate@0.25.2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
+
+const HF_MODEL =
+  "https://router.huggingface.co/hf-inference/models/ali-vilab/text-to-video-ms-1.7b";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
+  let videoRowId: string | null = null;
+
   try {
-    const body = await req.json();
-    const { prompt, action, predictionId, videoId } = body;
-    console.log("Received video request:", { action, prompt, predictionId });
-
-    const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
-    if (!REPLICATE_API_KEY) {
-      console.error("REPLICATE_API_KEY not configured");
-      return new Response(JSON.stringify({ error: "Video service not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    /* ---------- INPUT ---------- */
+    const { prompt } = await req.json();
+    if (!prompt?.trim()) {
+      return new Response(
+        JSON.stringify({ error: "Prompt is required" }),
+        { status: 400, headers: corsHeaders }
+      );
     }
 
-    // Get auth header and extract JWT token
-    const authHeader = req.headers.get("Authorization");
+    /* ---------- AUTH ---------- */
+    const authHeader = req.headers.get("authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "No authorization header" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: "Missing authorization header" }),
+        { status: 401, headers: corsHeaders }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-    
+    const jwt = authHeader.replace("Bearer ", "");
+
+    /* ---------- SUPABASE (SERVICE ROLE) ---------- */
     const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? ""
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Verify user by passing the JWT token directly
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
-    if (userError || !user) {
-      console.error("Auth error:", userError);
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser(jwt);
+
+    if (authErr || !user) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized user" }),
+        { status: 401, headers: corsHeaders }
+      );
     }
 
-    // Create authenticated client for database operations
-    const supabaseAuth = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const replicate = new Replicate({ auth: REPLICATE_API_KEY });
-
-    // Handle status check
-    if (action === "status" && predictionId) {
-      console.log("Checking status for prediction:", predictionId);
-      const prediction = await replicate.predictions.get(predictionId);
-      console.log("Status:", prediction.status);
-
-      // Update database if completed or failed
-      if (videoId && (prediction.status === "succeeded" || prediction.status === "failed")) {
-        const updateData: any = {
-          status: prediction.status === "succeeded" ? "completed" : "failed",
-        };
-        
-        if (prediction.status === "succeeded" && prediction.output) {
-          updateData.video_url = prediction.output;
-        }
-
-        await supabaseAuth
-          .from("generated_videos")
-          .update(updateData)
-          .eq("id", videoId);
-      }
-
-      return new Response(JSON.stringify({
-        status: prediction.status,
-        output: prediction.output,
-        error: prediction.error,
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Handle video generation
-    if (!prompt || prompt.trim().length === 0) {
-      return new Response(JSON.stringify({ error: "Prompt is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    console.log("Starting video generation for user:", user.id);
-
-    // Create a video record first
-    const { data: videoRecord, error: insertError } = await supabaseAuth
+    /* ---------- DB INSERT (processing) ---------- */
+    const { data: videoRow, error: insertErr } = await supabase
       .from("generated_videos")
       .insert({
         user_id: user.id,
-        prompt: prompt,
-        video_url: "",
+        prompt,
         status: "processing",
+        video_url: "",
       })
       .select()
       .single();
 
-    if (insertError) {
-      console.error("Error creating video record:", insertError);
-      return new Response(JSON.stringify({ error: "Failed to create video record" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (insertErr) throw insertErr;
+    videoRowId = videoRow.id;
+
+    /* ---------- HUGGING FACE ---------- */
+    const HF_API_KEY = Deno.env.get("HF_API_KEY");
+    if (!HF_API_KEY) throw new Error("HF_API_KEY missing");
+
+    const hfRes = await fetch(HF_MODEL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HF_API_KEY}`,
+        "Content-Type": "application/json",
+        Accept: "video/mp4",
+        "x-use-cache": "false", // important for router
+      },
+      body: JSON.stringify({
+        inputs: prompt,
+      }),
+    });
+
+    if (!hfRes.ok) {
+      const errText = await hfRes.text();
+      await supabase
+        .from("generated_videos")
+        .update({ status: "failed" })
+        .eq("id", videoRowId);
+
+      throw new Error(errText);
     }
 
-    // Start video generation with Replicate (using minimax video-01-live)
-    const prediction = await replicate.predictions.create({
-      model: "minimax/video-01-live",
-      input: {
-        prompt: prompt,
-        prompt_optimizer: true,
-      },
+    /* ---------- VIDEO UPLOAD ---------- */
+    const videoBuffer = await hfRes.arrayBuffer();
+    const fileName = `${crypto.randomUUID()}.mp4`;
+
+    await supabase.storage.from("videos").upload(fileName, videoBuffer, {
+      contentType: "video/mp4",
+      upsert: false,
     });
 
-    console.log("Prediction created:", prediction.id);
+    const { data: publicUrl } = supabase.storage
+      .from("videos")
+      .getPublicUrl(fileName);
 
-    // Update the video record with prediction ID
-    await supabaseAuth
+    /* ---------- DB UPDATE (completed) ---------- */
+    await supabase
       .from("generated_videos")
-      .update({ prediction_id: prediction.id })
-      .eq("id", videoRecord.id);
+      .update({
+        status: "completed",
+        video_url: publicUrl.publicUrl,
+      })
+      .eq("id", videoRowId);
 
-    return new Response(JSON.stringify({
-      videoId: videoRecord.id,
-      predictionId: prediction.id,
-      status: prediction.status,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
-  } catch (error) {
-    console.error("Video generation error:", error);
+    /* ---------- RESPONSE ---------- */
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      JSON.stringify({
+        videoId: videoRowId,
+        status: "completed",
+        video_url: publicUrl.publicUrl,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (err) {
+    console.error("VIDEO ERROR:", err);
+
+    if (videoRowId) {
+      try {
+        const supabase = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+        );
+
+        await supabase
+          .from("generated_videos")
+          .update({ status: "failed" })
+          .eq("id", videoRowId);
+      } catch {}
+    }
+
+    return new Response(
+      JSON.stringify({ error: "Video generation failed" }),
+      { status: 500, headers: corsHeaders }
     );
   }
 });

@@ -29,104 +29,121 @@ export function AIChat({ selectedFile, code, onClose }: AIChatProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [activeMode, setActiveMode] = useState<EditorMode>("chat");
-  const [copiedCode, setCopiedCode] = useState<number | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  /* ---------- AUTO SCROLL ---------- */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
 
+  /* ---------- SEND MESSAGE ---------- */
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
-    const userMessage = input.trim();
+    const userText = input.trim();
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
 
+    setMessages(prev => [...prev, { role: "user", content: userText }]);
+
     try {
-      const context = selectedFile
-        ? `Current file: ${selectedFile.name}\n\nCode:\n\`\`\`${selectedFile.language || ""}\n${code}\n\`\`\``
+      const fileContext = selectedFile
+        ? `Current file: ${selectedFile.name}
+
+\`\`\`${selectedFile.language ?? ""}
+${code}
+\`\`\``
         : "";
 
       const modePrefix =
         activeMode === "fix"
-          ? "[FIX MODE] Identify errors and provide corrected code with explanations.\n\n"
+          ? "[FIX MODE]\n"
           : activeMode === "refactor"
-          ? "[REFACTOR MODE] Improve and optimize the following code.\n\n"
+          ? "[REFACTOR MODE]\n"
           : "";
 
-      const response = await supabase.functions.invoke("ai-code", {
+      const res = await supabase.functions.invoke("ai-code", {
         body: {
           messages: [
             ...messages,
             {
               role: "user",
-              content: `${modePrefix}${context}\n\nUser request: ${userMessage}`,
+              content: `${modePrefix}${fileContext}\nUser: ${userText}`,
             },
           ],
         },
       });
 
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
+      if (res.error) throw new Error(res.error.message);
 
-      setMessages((prev) => [...prev, { role: "assistant", content: response.data.response }]);
-    } catch (error) {
-      console.error("AI Error:", error);
-      toast.error("Failed to get AI response");
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
-        { role: "assistant", content: "Sorry, I encountered an error. Please try again." },
+        { role: "assistant", content: res.data.response },
+      ]);
+    } catch (err) {
+      console.error("AIChat error:", err);
+      toast.error("AI request failed");
+      setMessages(prev => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "❌ AI failed. Please try again.",
+        },
       ]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const copyCodeBlock = (codeText: string, index: number) => {
-    navigator.clipboard.writeText(codeText);
-    setCopiedCode(index);
-    setTimeout(() => setCopiedCode(null), 2000);
+  /* ---------- COPY CODE ---------- */
+  const copyCode = (text: string, index: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 1500);
   };
 
+  /* ---------- RENDER MESSAGE ---------- */
   const renderMessage = (content: string, msgIndex: number) => {
     const parts = content.split(/(```[\s\S]*?```)/g);
-    let codeBlockIndex = 0;
+    let codeIndex = 0;
 
     return parts.map((part, i) => {
       if (part.startsWith("```")) {
         const match = part.match(/```(\w+)?\n?([\s\S]*?)```/);
-        if (match) {
-          const [, lang, codeContent] = match;
-          const currentIndex = codeBlockIndex++;
-          const globalIndex = msgIndex * 1000 + currentIndex;
+        if (!match) return null;
 
-          return (
-            <div key={i} className="relative my-2 rounded-lg overflow-hidden bg-[#1e1e2e] border border-border">
-              <div className="flex items-center justify-between px-3 py-1 bg-[#181825] text-xs text-muted-foreground">
-                <span>{lang || "code"}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2"
-                  onClick={() => copyCodeBlock(codeContent.trim(), globalIndex)}
-                >
-                  {copiedCode === globalIndex ? (
-                    <Check className="w-3 h-3 text-green-400" />
-                  ) : (
-                    <Copy className="w-3 h-3" />
-                  )}
-                </Button>
-              </div>
-              <pre className="p-3 overflow-x-auto text-sm">
-                <code>{codeContent.trim()}</code>
-              </pre>
+        const [, lang, codeText] = match;
+        const globalIndex = msgIndex * 1000 + codeIndex++;
+
+        return (
+          <div
+            key={i}
+            className="my-2 rounded-lg overflow-hidden border border-border bg-[#1e1e2e]"
+          >
+            <div className="flex items-center justify-between px-3 py-1 text-xs bg-[#181825]">
+              <span>{lang || "code"}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2"
+                onClick={() => copyCode(codeText.trim(), globalIndex)}
+              >
+                {copiedIndex === globalIndex ? (
+                  <Check className="w-3 h-3 text-green-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </Button>
             </div>
-          );
-        }
+            <pre className="p-3 text-sm overflow-x-auto">
+              <code>{codeText.trim()}</code>
+            </pre>
+          </div>
+        );
       }
+
       return (
         <span key={i} className="whitespace-pre-wrap">
           {part}
@@ -135,29 +152,29 @@ export function AIChat({ selectedFile, code, onClose }: AIChatProps) {
     });
   };
 
+  /* ---------- UI ---------- */
   return (
-    <div className="w-96 border-l border-border flex flex-col bg-[#252526]">
-      {/* Header */}
-      <div className="p-3 border-b border-border flex items-center justify-between">
+    <div className="w-96 flex flex-col bg-[#252526] border-l border-border">
+      {/* HEADER */}
+      <div className="p-3 flex items-center justify-between border-b border-border">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-primary" />
-          <span className="font-medium text-sm">AI Assistant</span>
+          <span className="text-sm font-medium">AI Assistant</span>
         </div>
-        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={onClose}>
+        <Button size="icon" variant="ghost" onClick={onClose}>
           <X className="w-4 h-4" />
         </Button>
       </div>
 
-      {/* Mode Buttons */}
-      <div className="p-2 border-b border-border flex gap-1">
+      {/* MODES */}
+      <div className="p-2 flex gap-1 border-b border-border">
         <Button
           size="sm"
           variant={activeMode === "chat" ? "default" : "ghost"}
           className="flex-1 h-7 text-xs"
           onClick={() => setActiveMode("chat")}
         >
-          <Wand2 className="w-3 h-3 mr-1" />
-          Chat
+          <Wand2 className="w-3 h-3 mr-1" /> Chat
         </Button>
         <Button
           size="sm"
@@ -165,8 +182,7 @@ export function AIChat({ selectedFile, code, onClose }: AIChatProps) {
           className="flex-1 h-7 text-xs"
           onClick={() => setActiveMode("fix")}
         >
-          <Bug className="w-3 h-3 mr-1" />
-          Fix
+          <Bug className="w-3 h-3 mr-1" /> Fix
         </Button>
         <Button
           size="sm"
@@ -174,60 +190,70 @@ export function AIChat({ selectedFile, code, onClose }: AIChatProps) {
           className="flex-1 h-7 text-xs"
           onClick={() => setActiveMode("refactor")}
         >
-          <RefreshCw className="w-3 h-3 mr-1" />
-          Refactor
+          <RefreshCw className="w-3 h-3 mr-1" /> Refactor
         </Button>
       </div>
 
-      {/* Messages */}
+      {/* MESSAGES */}
       <ScrollArea className="flex-1 p-3">
         {messages.length === 0 ? (
-          <div className="text-center text-muted-foreground text-sm py-8">
+          <div className="text-center text-muted-foreground text-sm py-10">
             <Wand2 className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p>Ask me about your code!</p>
-            <p className="text-xs mt-1">I can help fix bugs, refactor, and explain code.</p>
+            Ask anything about your code
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((msg, index) => (
+            {messages.map((m, i) => (
               <div
-                key={index}
+                key={i}
                 className={cn(
                   "text-sm",
-                  msg.role === "user" ? "ml-4 p-3 rounded-lg bg-primary/10" : "mr-4"
+                  m.role === "user"
+                    ? "ml-4 bg-primary/10 p-3 rounded-lg"
+                    : "mr-4"
                 )}
               >
-                {msg.role === "assistant" ? renderMessage(msg.content, index) : msg.content}
+                {m.role === "assistant"
+                  ? renderMessage(m.content, i)
+                  : m.content}
               </div>
             ))}
             {isLoading && (
-              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+              <div className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Thinking...</span>
+                Thinking...
               </div>
             )}
-            <div ref={messagesEndRef} />
+            <div ref={bottomRef} />
           </div>
         )}
       </ScrollArea>
 
-      {/* Input */}
+      {/* INPUT */}
       <div className="p-3 border-t border-border">
         <div className="flex gap-2">
           <Textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your code..."
-            className="min-h-[60px] text-sm resize-none"
-            onKeyDown={(e) => {
+            onChange={e => setInput(e.target.value)}
+            placeholder="Ask about your code…"
+            className="min-h-[60px] resize-none text-sm"
+            onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
               }
             }}
           />
-          <Button onClick={sendMessage} disabled={isLoading || !input.trim()} size="icon" className="h-auto">
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          <Button
+            size="icon"
+            disabled={isLoading || !input.trim()}
+            onClick={sendMessage}
+          >
+            {isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
           </Button>
         </div>
       </div>

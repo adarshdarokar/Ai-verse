@@ -1,12 +1,10 @@
-import { useState, useCallback, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
-import { 
-  FileItem, 
-  OpenTab, 
-  PanelType, 
-  ActivityType, 
-  Message 
+import {
+  FileItem,
+  OpenTab,
+  PanelType,
+  ActivityType,
 } from "@/components/code-editor/types";
 
 import { ActivityBar } from "@/components/code-editor/ActivityBar";
@@ -26,362 +24,233 @@ import { FindReplace } from "@/components/code-editor/FindReplace";
 import { GoToLine } from "@/components/code-editor/GoToLine";
 import { sampleFiles } from "@/components/code-editor/sample-files";
 
-import { 
-  FileCode,
-  MessageSquare,
-  X,
-} from "lucide-react";
+import { FileCode, MessageSquare, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// ──────────────────────────────────────────────────────────
-//  START CODE EDITOR
-// ──────────────────────────────────────────────────────────
+/* ───────── BASIC JS RUNNER ───────── */
+const runJS = (code: string) => {
+  const logs: string[] = [];
+  try {
+    new Function("console", code)({
+      log: (...a: any[]) => logs.push(a.join(" ")),
+      error: (...a: any[]) => logs.push("ERROR: " + a.join(" ")),
+    });
+  } catch (e: any) {
+    logs.push("ERROR: " + e.message);
+  }
+  return logs;
+};
 
 const CodeEditor = () => {
+  /* ───────── STATE ───────── */
   const [files, setFiles] = useState<FileItem[]>(sampleFiles);
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
 
-  const [activeActivity, setActiveActivity] = useState<ActivityType>("explorer");
-  const [showBottomPanel, setShowBottomPanel] = useState(true);
-  const [activeBottomPanel, setActiveBottomPanel] = useState<PanelType>("terminal");
-  const [isBottomPanelMaximized, setIsBottomPanelMaximized] = useState(false);
+  const [activity, setActivity] = useState<ActivityType>("explorer");
+  const [bottomPanel, setBottomPanel] = useState<PanelType>("terminal");
+  const [showBottom, setShowBottom] = useState(true);
+  const [maxBottom, setMaxBottom] = useState(false);
 
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [showFindReplace, setShowFindReplace] = useState(false);
-  const [showGoToLine, setShowGoToLine] = useState(false);
-  const [showAIChat, setShowAIChat] = useState(false);
+  const [cmd, setCmd] = useState(false);
+  const [find, setFind] = useState(false);
+  const [goto, setGoto] = useState(false);
+  const [ai, setAi] = useState(false);
 
-  const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 });
-
-  const [terminalOutput, setTerminalOutput] = useState<string[]>([
-    "Welcome to AIVerse Terminal",
-    "Type 'help' for available commands",
+  const [terminal, setTerminal] = useState<string[]>([
+    "AIVerse Terminal",
+    "Commands: run | ls | touch <file> | mkdir <folder> | clear",
     "",
   ]);
-
-  const [messages] = useState<Message[]>([]);
-  const [problems] = useState<{ type: "error" | "warning"; message: string; file: string; line: number }[]>([]);
   const [output, setOutput] = useState<string[]>([]);
+  const [problems] = useState<any[]>([]);
 
-  const currentTab = openTabs.find((tab) => tab.path === activeTab);
-  const currentFile = currentTab?.file;
-  const currentCode = currentFile?.content || "";
-  const currentLanguage = currentFile?.language || "plaintext";
+  /* ───────── DERIVED ───────── */
+  const tab = openTabs.find(t => t.path === activeTab);
+  const file = tab?.file ?? null;
+  const code = file?.content ?? "";
+  const lang = file?.language ?? "plaintext";
 
-  // UPDATE FILE CONTENT
-  const updateFileContent = useCallback((path: string, content: string) => {
-    setFiles(prev => {
-      const updateRecursive = (items: FileItem[], parts: string[]): FileItem[] =>
-        items.map(item => {
-          if (item.name === parts[0]) {
-            if (parts.length === 1) return { ...item, content, modified: true };
-            if (item.children) return { ...item, children: updateRecursive(item.children, parts.slice(1)) };
-          }
-          return item;
-        });
-
-      return updateRecursive(prev, path.split("/"));
-    });
-
-    setOpenTabs(prev =>
-      prev.map(tab =>
-        tab.path === path ? { ...tab, file: { ...tab.file, content, modified: true } } : tab
-      )
-    );
-  }, []);
-
-  // SELECT FILE
-  const handleSelectFile = useCallback((file: FileItem, path: string) => {
-    if (file.type === "folder") return;
-
-    const exists = openTabs.find(tab => tab.path === path);
-    if (exists) return setActiveTab(path);
-
-    const newTab: OpenTab = { file: { ...file, path }, path };
-    setOpenTabs(prev => [...prev, newTab]);
-    setActiveTab(path);
-  }, [openTabs]);
-
-  // CLOSE TAB
-  const handleCloseTab = useCallback(
-    (path: string) => {
-      setOpenTabs(prev => {
-        const filtered = prev.filter(t => t.path !== path);
-        if (activeTab === path) {
-          setActiveTab(filtered.length ? filtered[filtered.length - 1].path : null);
+  /* ───────── FILE TREE HELPERS ───────── */
+  const updateTree = (
+    list: FileItem[],
+    parts: string[],
+    updater: (f: FileItem) => FileItem | null
+  ): FileItem[] =>
+    list
+      .map(i => {
+        if (i.name === parts[0]) {
+          if (parts.length === 1) return updater(i);
+          if (!i.children) return i;
+          return { ...i, children: updateTree(i.children, parts.slice(1), updater) };
         }
-        return filtered;
-      });
-    },
-    [activeTab]
-  );
+        return i;
+      })
+      .filter(Boolean) as FileItem[];
 
-  // SAVE FILE
-  const handleSaveFile = useCallback(() => {
-    if (!activeTab) return;
-    setOpenTabs(prev =>
-      prev.map(tab =>
-        tab.path === activeTab ? { ...tab, file: { ...tab.file, modified: false } } : tab
+  const updateFile = (path: string, content: string) => {
+    setFiles(f =>
+      updateTree(f, path.split("/"), i => ({ ...i, content, modified: true }))
+    );
+    setOpenTabs(t =>
+      t.map(tab =>
+        tab.path === path
+          ? { ...tab, file: { ...tab.file, content, modified: true } }
+          : tab
       )
     );
-    toast.success("File saved");
-  }, [activeTab]);
-
-  // TERMINAL COMMANDS
-  const handleTerminalCommand = useCallback(
-    (command: string) => {
-      const cmd = command.trim().split(" ")[0];
-      setTerminalOutput(prev => [...prev, `$ ${command}`]);
-
-      if (cmd === "clear") setTerminalOutput([]);
-      else if (cmd === "help") setTerminalOutput(prev => [...prev, "Commands: help, clear, ls, pwd"]);
-      else setTerminalOutput(prev => [...prev, `Unknown command: ${cmd}`]);
-    },
-    []
-  );
-
-  // RUN CODE
-  const handleRunCode = useCallback(() => {
-    if (!currentFile) return toast.error("No file selected");
-
-    setActiveBottomPanel("output");
-    setShowBottomPanel(true);
-
-    setOutput(prev => [
-      ...prev,
-      `Running ${currentFile.name}...`,
-      `No execution engine installed yet.`,
-      ""
-    ]);
-  }, [currentFile]);
-
-  // KEYBOARD SHORTCUTS
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        handleSaveFile();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "p") {
-        e.preventDefault();
-        setShowCommandPalette(true);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-        e.preventDefault();
-        setShowFindReplace(true);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "g") {
-        e.preventDefault();
-        setShowGoToLine(true);
-      }
-    };
-
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [handleSaveFile]);
-
-  // RENDER SIDE PANEL
-  const renderSidePanel = () => {
-    switch (activeActivity) {
-      case "explorer":
-        return (
-          <FileExplorer
-            files={files}
-            selectedFile={currentFile || null}
-            onSelectFile={handleSelectFile}
-          />
-        );
-
-      case "search":
-        return (
-          <SearchPanel
-            files={files}
-            onSelectResult={(path) => toast.info(`Navigate to: ${path}`)}
-          />
-        );
-
-      case "git":
-        return <GitPanel />;
-
-      case "extensions":
-        return <ExtensionsPanel />;
-
-      case "settings":
-        return <SettingsPanel />;
-
-      default:
-        return null;
-    }
   };
 
-  // ───────────────────────────────────────────────
-  //  UI + THEME BELOW 🔥 CLASSY DARK BROWN THEME
-  // ───────────────────────────────────────────────
+  const openFile = (file: FileItem, path: string) => {
+    if (file.type === "folder") return;
+    setOpenTabs(t =>
+      t.find(x => x.path === path)
+        ? t
+        : [...t, { file: { ...file, path }, path }]
+    );
+    setActiveTab(path);
+  };
 
+  /* ───────── TERMINAL ───────── */
+  const terminalCmd = (cmd: string) => {
+    const [c, arg] = cmd.trim().split(" ");
+
+    if (c === "clear") {
+      setTerminal([
+        "AIVerse Terminal",
+        "Commands: run | ls | touch <file> | mkdir <folder> | clear",
+        "",
+      ]);
+      return;
+    }
+
+    if (c === "ls") {
+      setTerminal(t => [
+        ...t,
+        files.map(f => (f.type === "folder" ? `${f.name}/` : f.name)).join("  "),
+      ]);
+      return;
+    }
+
+    if (c === "touch" && arg) {
+      setFiles(f => [
+        ...f,
+        { name: arg, type: "file", content: "", language: "javascript" },
+      ]);
+      toast.success(`File created: ${arg}`);
+      return;
+    }
+
+    if (c === "mkdir" && arg) {
+      setFiles(f => [...f, { name: arg, type: "folder", children: [] }]);
+      toast.success(`Folder created: ${arg}`);
+      return;
+    }
+
+    if (c === "run" && file) {
+      const out = runJS(file.content ?? "");
+      setOutput(o => [...o, `> Running ${file.name}`, ...out, ""]);
+      setBottomPanel("output");
+      setShowBottom(true);
+      return;
+    }
+
+    setTerminal(t => [...t, `$ ${cmd}`, "Unknown command"]);
+  };
+
+  /* ───────── SHORTCUTS ───────── */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "`") {
+        e.preventDefault();
+        setShowBottom(v => !v);
+      }
+      if (e.ctrlKey && e.key === "p") {
+        e.preventDefault();
+        setCmd(true);
+      }
+      if (e.ctrlKey && e.key === "f") {
+        e.preventDefault();
+        setFind(true);
+      }
+      if (e.ctrlKey && e.key === "g") {
+        e.preventDefault();
+        setGoto(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /* ───────── UI ───────── */
   return (
-    <div className="h-full flex flex-col bg-[#1D1A16] text-[#F6EDE3] overflow-hidden select-none">
+    <div className="h-full flex flex-col bg-[#1D1A16] text-[#F6EDE3]">
+      <CommandPalette open={cmd} onOpenChange={setCmd} files={files} onSelectFile={openFile} />
+      {find && <FindReplace onClose={() => setFind(false)} />}
+      {goto && <GoToLine onClose={() => setGoto(false)} totalLines={code.split("\n").length} currentLine={1} onGoToLine={() => {}} />}
 
-      {/* COMMAND PALETTE */}
-      <CommandPalette
-        open={showCommandPalette}
-        onOpenChange={setShowCommandPalette}
-        files={files}
-        onSelectFile={handleSelectFile}
-      />
+      <div className="flex flex-1 overflow-hidden">
+        <ActivityBar active={activity} onActivityChange={setActivity} />
 
-      {/* FIND REPLACE */}
-      {showFindReplace && (
-        <FindReplace
-          onClose={() => setShowFindReplace(false)}
-          onFindNext={() => {}}
-          onFindPrevious={() => {}}
-          onReplace={() => {}}
-          onReplaceAll={() => {}}
-        />
-      )}
-
-      {/* GOTO LINE */}
-      {showGoToLine && (
-        <GoToLine
-          onClose={() => setShowGoToLine(false)}
-          totalLines={currentCode.split("\n").length}
-          currentLine={cursorPosition.line}
-          onGoToLine={(line) => setCursorPosition({ line, column: 1 })}
-        />
-      )}
-
-      {/* MAIN LAYOUT */}
-      <div className="flex-1 flex overflow-hidden">
-
-        {/* LEFT ACTIVITY BAR */}
-        <ActivityBar
-          active={activeActivity}
-          onActivityChange={setActiveActivity}
-          onRunCode={handleRunCode}
-          onDebug={() => toast.info("Debugging...")}
-          className="bg-[#2C2722] border-r border-[#3D332C]"
-        />
-
-        {/* SIDE PANEL */}
-        <div className="w-64 bg-[#24201C] border-r border-[#3D332C] shadow-inner overflow-hidden">
-          {renderSidePanel()}
+        <div className="w-64 bg-[#24201C]">
+          {{
+            explorer: <FileExplorer files={files} selectedFile={file} onSelectFile={openFile} />,
+            search: <SearchPanel files={files} onSelectResult={p => toast.info(p)} />,
+            git: <GitPanel />,
+            extensions: <ExtensionsPanel />,
+            settings: <SettingsPanel />,
+          }[activity]}
         </div>
 
-        {/* EDITOR AREA */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-
-          {/* EDITOR TABS */}
+        <div className="flex-1 flex flex-col">
           <EditorTabs
             tabs={openTabs}
             activeTab={activeTab}
             onSelectTab={setActiveTab}
-            onCloseTab={handleCloseTab}
+            onCloseTab={p => setOpenTabs(t => t.filter(tab => tab.path !== p))}
             modifiedFiles={new Set(openTabs.filter(t => t.file.modified).map(t => t.path))}
-            className="
-              bg-[#2A2420]
-              border-b border-[#3D332C]
-              [&>.tab]:bg-[#3A322D]
-              [&>.tab]:text-[#D6C7B7]
-              [&>.tab-active]:bg-[#C7A583]
-              [&>.tab-active]:text-[#3A2A20]
-              [&>.tab]:border-r border-[#3D332C]
-            "
           />
 
-          {/* BREADCRUMBS */}
-          {activeTab && (
-            <Breadcrumbs
-              path={activeTab}
-              className="bg-[#24201C] border-b border-[#3D332C] text-[#AD9C8E]"
-            />
-          )}
+          {activeTab && <Breadcrumbs path={activeTab} />}
 
-          {/* EDITOR PANE */}
-          <div className="flex-1 flex overflow-hidden bg-[#1A1714] text-[#F6EDE3]">
-            {currentFile ? (
-              <CodePane
-                code={currentCode}
-                language={currentLanguage}
-                onChange={(newCode) => activeTab && updateFileContent(activeTab, newCode)}
-                onSave={handleSaveFile}
-              />
+          <div className="flex-1 bg-[#1A1714]">
+            {file ? (
+              <CodePane code={code} language={lang} onChange={v => activeTab && updateFile(activeTab, v)} />
             ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center opacity-60">
-                  <FileCode className="w-20 h-20 mx-auto mb-4 opacity-10" />
-                  <h2 className="text-xl font-light">AIVerse Editor</h2>
-                  <p className="text-sm text-[#B8A89A]">Open a file to start editing</p>
-                </div>
+              <div className="h-full flex items-center justify-center opacity-50">
+                <FileCode size={64} />
               </div>
             )}
           </div>
 
-          {/* BOTTOM PANEL */}
-          {showBottomPanel && (
+          {showBottom && (
             <BottomPanel
-              activePanel={activeBottomPanel}
-              onPanelChange={setActiveBottomPanel}
-              onClose={() => setShowBottomPanel(false)}
-              isMaximized={isBottomPanelMaximized}
-              onToggleMaximize={() => setIsBottomPanelMaximized(v => !v)}
-              terminalOutput={terminalOutput}
-              problems={problems}
+              activePanel={bottomPanel}
+              onPanelChange={setBottomPanel}
+              onClose={() => setShowBottom(false)}
+              isMaximized={maxBottom}
+              onToggleMaximize={() => setMaxBottom(v => !v)}
+              terminalOutput={terminal}
               output={output}
-              onTerminalCommand={handleTerminalCommand}
+              problems={problems}
+              onTerminalCommand={terminalCmd}
               onClearOutput={() => setOutput([])}
-              className="
-                bg-[#24201C]
-                border-t border-[#3D332C]
-                text-[#E6D7C7]
-                [&_.panel-tab]:bg-[#3A322D]
-                [&_.panel-tab-active]:bg-[#C7A583] [&_.panel-tab-active]:text-[#3A2A20]
-              "
             />
           )}
         </div>
 
-        {/* AI CHAT PANEL */}
-        {showAIChat && (
-          <div className="w-80 bg-[#25221E] border-l border-[#3D332C] shadow-lg">
-            <div className="h-10 px-3 flex items-center justify-between border-b border-[#3D332C] bg-[#2A2520]">
-              <span className="text-sm font-medium flex items-center gap-2">
-                <MessageSquare className="w-4 h-4" /> AI Assistant
-              </span>
-              <Button size="icon" variant="ghost" className="h-6 w-6 p-0" onClick={() => setShowAIChat(false)}>
-                <X className="w-4 h-4 text-[#EBD8C8]" />
-              </Button>
+        {ai && (
+          <div className="w-80 bg-[#25221E] border-l border-[#3D332C]">
+            <div className="h-10 flex items-center justify-between px-3">
+              <span className="flex gap-2"><MessageSquare /> AI</span>
+              <Button size="icon" variant="ghost" onClick={() => setAi(false)}><X /></Button>
             </div>
-            <AIChat selectedFile={currentFile || null} code={currentCode} />
+            <AIChat selectedFile={file} code={code} />
           </div>
         )}
       </div>
 
-      {/* STATUS BAR */}
-      <StatusBar
-        language={currentLanguage}
-        branch="main"
-        errors={problems.filter(p => p.type === "error").length}
-        warnings={problems.filter(p => p.type === "warning").length}
-        className="bg-[#2C2722] border-t border-[#3D332C] text-[#C7B8A7]"
-      />
-
-      {/* FLOATING AI BUTTON */}
-      {!showAIChat && (
-        <Button
-          onClick={() => setShowAIChat(true)}
-          className="
-            fixed bottom-12 right-4
-            bg-gradient-to-br from-[#5A3A2D] to-[#3A251C]
-            text-[#EBD8C8]
-            rounded-full shadow-xl
-            hover:opacity-90
-          "
-        >
-          <MessageSquare className="w-4 h-4 mr-2" />
-          AI Assistant
-        </Button>
-      )}
+      <StatusBar language={lang} branch="main" errors={0} warnings={0} />
     </div>
   );
 };
