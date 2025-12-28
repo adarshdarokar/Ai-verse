@@ -59,7 +59,9 @@ export const StartCollaborationForm = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!username.trim() || !projectName.trim()) {
+    const safeUsername = username.trim();
+
+    if (!safeUsername || !projectName.trim()) {
       toast.error('All fields required');
       return;
     }
@@ -76,11 +78,24 @@ export const StartCollaborationForm = ({
         return;
       }
 
+      /* 🔥 FIX: prevent duplicate room by same owner + name */
+      const { data: existingRoom } = await supabase
+        .from('collaboration_rooms')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('name', projectName.trim())
+        .maybeSingle();
+
+      if (existingRoom) {
+        toast.error('Project with same name already exists');
+        return;
+      }
+
       /* CREATE ROOM */
       const { data: room, error: roomError } = await supabase
         .from('collaboration_rooms')
         .insert({
-          name: projectName,
+          name: projectName.trim(),
           owner_id: user.id,
         })
         .select()
@@ -88,18 +103,22 @@ export const StartCollaborationForm = ({
 
       if (roomError) throw roomError;
 
-      /* ADD OWNER AS MEMBER */
-      await supabase.from('collaboration_members').insert({
-        room_id: room.id,
-        user_id: user.id,
-        username: username,
-      });
+      /* 🔥 FIX: OWNER AS MEMBER (UPSERT, NOT INSERT) */
+      await supabase
+        .from('collaboration_members')
+        .upsert(
+          {
+            room_id: room.id,
+            user_id: user.id,
+            username: safeUsername,
+          },
+          { onConflict: ['room_id', 'user_id'] }
+        );
 
       /* SEND INVITES (SAFE) */
       for (const email of invitedEmails) {
         const safeEmail = email.toLowerCase();
 
-        // 🛑 duplicate pending invite guard
         const { data: existing } = await supabase
           .from('collaboration_invitations')
           .select('id')
@@ -126,7 +145,10 @@ export const StartCollaborationForm = ({
       }
 
       toast.success('Room created!');
-      onRoomCreated(room.id, username);
+
+      /* 🔥 FIX: guaranteed redirect consistency */
+      onRoomCreated(room.id, safeUsername);
+
     } catch (err) {
       console.error(err);
       toast.error('Failed to create room');

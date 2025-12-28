@@ -5,14 +5,16 @@ import { User } from "@supabase/supabase-js";
 import Sidebar from "@/components/Sidebar";
 import { Loader2 } from "lucide-react";
 
-/* 🔥 ADD THIS IMPORT */
+/* 🔥 GLOBAL INVITE POPUP */
 import { InvitationNotification } from "@/components/collaboration/InvitationNotification";
 
 const Dashboard = () => {
   const navigate = useNavigate();
+
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /* ================= AUTH SESSION ================= */
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
@@ -36,6 +38,7 @@ const Dashboard = () => {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
+  /* ================= LOADING ================= */
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -48,20 +51,33 @@ const Dashboard = () => {
     return null;
   }
 
+  /* ================= UI ================= */
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       <Sidebar user={user} />
 
       <main className="flex-1 overflow-y-auto relative">
+
         {/* 🔥 GLOBAL INVITE POPUP (PUBG STYLE) */}
         <InvitationNotification
           onAccept={(roomId) => {
-            navigate(`/dashboard/collaboration/${roomId}`);
+            /**
+             * 🔥 IMPORTANT FIX
+             * Invite accept ke baad:
+             * - Room change hota hai
+             * - CollaborationRoom remount hota hai
+             * - Username / presence fresh load hota hai
+             */
+            navigate(`/dashboard/collaboration/${roomId}`, {
+              state: { joinedViaInvite: true },
+              replace: true,
+            });
           }}
         />
 
-        {/* EXISTING ROUTES */}
+        {/* 🔥 NESTED ROUTES */}
         <Outlet />
+
       </main>
     </div>
   );

@@ -5,7 +5,7 @@ interface Member {
   id: string;
   user_id: string;
   username: string;
-  status: string;
+  status?: string;
   isOnline?: boolean;
 }
 
@@ -20,19 +20,43 @@ export const ActiveUsersList = ({
   currentUserId,
   ownerId,
 }: ActiveUsersListProps) => {
-  const sortedMembers = [...members].sort((a, b) => {
+
+  /* ================= NORMALIZE + DEDUPE ================= */
+
+  const safeMembers: Member[] = Array.from(
+    new Map(
+      (members || []).map((m) => [
+        m.user_id,
+        {
+          ...m,
+          username: m.username || "User",
+          isOnline: Boolean(m.isOnline),
+        },
+      ])
+    ).values()
+  );
+
+  /* ================= SORT ================= */
+
+  const sortedMembers = [...safeMembers].sort((a, b) => {
+    // Owner always on top
+    if (a.user_id === ownerId && b.user_id !== ownerId) return -1;
+    if (b.user_id === ownerId && a.user_id !== ownerId) return 1;
+
+    // Online priority
     if (a.isOnline && !b.isOnline) return -1;
     if (!a.isOnline && b.isOnline) return 1;
-    if (a.user_id === ownerId) return -1;
-    if (b.user_id === ownerId) return 1;
+
     return 0;
   });
+
+  /* ================= UI ================= */
 
   return (
     <div
       className="
         h-full flex flex-col
-        bg-[#E8DCCF]         /* Darker beige premium */
+        bg-[#E8DCCF]
         border-r border-[#CDBEAE]
         rounded-r-2xl shadow-xl
       "
@@ -48,9 +72,15 @@ export const ActiveUsersList = ({
       >
         <div className="flex items-center gap-2">
           <User className="h-4 w-4 text-[#5A3F31]" />
-          <h3 className="text-sm font-semibold text-[#3E2D23]">Members</h3>
+          <h3 className="text-sm font-semibold text-[#3E2D23]">
+            Members
+          </h3>
         </div>
-        <p className="text-xs text-[#7A6A5C] mt-0.5">{members.length}/4 users</p>
+
+        {/* 🔥 FIXED COUNT */}
+        <p className="text-xs text-[#7A6A5C] mt-0.5">
+          {safeMembers.length} user{safeMembers.length !== 1 && "s"}
+        </p>
       </div>
 
       {/* MEMBER LIST */}
@@ -58,16 +88,14 @@ export const ActiveUsersList = ({
         <div className="p-3 space-y-2">
           {sortedMembers.map((member) => (
             <div
-              key={member.id}
+              key={member.user_id}
               className={`
                 flex items-center gap-3 p-3 rounded-xl transition-all
-
                 ${
                   member.isOnline
                     ? "bg-gradient-to-r from-[#5E4032] to-[#4A3328] text-white shadow-md border border-[#C7A583]/30"
-                    : "bg-[#F0E5D8]/80 text-[#3E2D23] border border-transparent"
+                    : "bg-[#F0E5D8]/80 text-[#3E2D23]"
                 }
-
                 ${
                   member.user_id === currentUserId
                     ? "ring-1 ring-[#C7A583]/50"
@@ -80,8 +108,7 @@ export const ActiveUsersList = ({
                 <div
                   className={`
                     w-9 h-9 rounded-xl flex items-center justify-center 
-                    text-xs font-semibold border transition-all
-
+                    text-xs font-semibold border
                     ${
                       member.isOnline
                         ? "bg-gradient-to-br from-[#6A4A3C] to-[#4A3328] text-white border-[#D4B08A]"
@@ -115,7 +142,9 @@ export const ActiveUsersList = ({
                 <div className="flex items-center gap-1.5">
                   <span
                     className={`text-xs font-semibold truncate ${
-                      member.isOnline ? "text-white" : "text-[#3E2D23]"
+                      member.isOnline
+                        ? "text-white"
+                        : "text-[#3E2D23]"
                     }`}
                   >
                     {member.username}
@@ -124,7 +153,9 @@ export const ActiveUsersList = ({
                   {member.user_id === ownerId && (
                     <Crown
                       className={`h-3 w-3 ${
-                        member.isOnline ? "text-[#F4D8A6]" : "text-[#C7A583]"
+                        member.isOnline
+                          ? "text-[#F4D8A6]"
+                          : "text-[#C7A583]"
                       }`}
                     />
                   )}
@@ -140,7 +171,9 @@ export const ActiveUsersList = ({
                   />
                   <span
                     className={`text-[10px] ${
-                      member.isOnline ? "text-white/90" : "text-[#7A6A5C]"
+                      member.isOnline
+                        ? "text-white/90"
+                        : "text-[#7A6A5C]"
                     }`}
                   >
                     {member.isOnline ? "Online" : "Offline"}

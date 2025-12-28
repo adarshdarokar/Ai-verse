@@ -31,44 +31,41 @@ export const InvitationNotification = ({ onAccept }: Props) => {
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  /* ================= LOAD EXISTING INVITES ================= */
+  /* ================= LOAD INVITES ================= */
 
   useEffect(() => {
+    let mounted = true;
+
     const loadInvites = async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data?.user) return;
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user || !mounted) return;
 
-      const user = data.user;
+      const user = auth.user;
+      const email = user.email?.toLowerCase();
 
-      const { data: byId } = await supabase
+      const { data, error } = await supabase
         .from("collaboration_invitations")
-        .select(`
+        .select(
+          `
           id,
           room_id,
           inviter_id,
+          invitee_id,
+          invitee_email,
           collaboration_rooms ( name )
-        `)
-        .eq("invitee_id", user.id)
+        `
+        )
+        .or(
+          `invitee_id.eq.${user.id}${
+            email ? `,invitee_email.eq.${email}` : ""
+          }`
+        )
         .eq("status", "pending");
 
-      const { data: byEmail } = user.email
-        ? await supabase
-            .from("collaboration_invitations")
-            .select(`
-              id,
-              room_id,
-              inviter_id,
-              collaboration_rooms ( name )
-            `)
-            .eq("invitee_email", user.email.toLowerCase())
-            .eq("status", "pending")
-        : { data: [] };
-
-      const rows = [...(byId || []), ...(byEmail || [])];
-      if (rows.length === 0) return;
+      if (error || !data || !mounted) return;
 
       const mapped: Invitation[] = await Promise.all(
-        rows.map(async (inv: any) => {
+        data.map(async (inv: any) => {
           const { data: inviter } = await supabase
             .from("profiles")
             .select("full_name,email")
@@ -88,26 +85,48 @@ export const InvitationNotification = ({ onAccept }: Props) => {
         })
       );
 
-      setInvites(mapped);
+      // 🔒 strong dedupe
+      setInvites((prev) => {
+        const map = new Map<string, Invitation>();
+        [...mapped, ...prev].forEach((i) => map.set(i.id, i));
+        return Array.from(map.values());
+      });
     };
 
     loadInvites();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  /* ================= REALTIME ================= */
+  /* ================= AUTH RESET ================= */
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        setInvites([]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  /* ================= REALTIME LISTENER ================= */
 
   useEffect(() => {
     let channel: any;
 
     const subscribe = async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data?.user) return;
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) return;
 
-      const user = data.user;
+      const user = auth.user;
       const email = user.email?.toLowerCase();
 
       channel = supabase
-        .channel(`invite-realtime-${user.id}`)
+        .channel(`invites-${user.id}`)
         .on(
           "postgres_changes",
           {
@@ -163,7 +182,9 @@ export const InvitationNotification = ({ onAccept }: Props) => {
     };
 
     subscribe();
-    return () => channel && supabase.removeChannel(channel);
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
 
   /* ================= ACCEPT / DECLINE ================= */
@@ -172,14 +193,14 @@ export const InvitationNotification = ({ onAccept }: Props) => {
     setLoadingId(inv.id);
 
     try {
-      const { data } = await supabase.auth.getUser();
-      if (!data?.user) return;
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) return;
 
       if (accept) {
         const { data: profile } = await supabase
           .from("profiles")
           .select("full_name,email")
-          .eq("id", data.user.id)
+          .eq("id", auth.user.id)
           .single();
 
         await supabase
@@ -187,11 +208,12 @@ export const InvitationNotification = ({ onAccept }: Props) => {
           .upsert(
             {
               room_id: inv.room_id,
-              user_id: data.user.id,
+              user_id: auth.user.id,
               username:
                 profile?.full_name ||
                 profile?.email?.split("@")[0] ||
                 "User",
+              joined_at: new Date().toISOString(),
             },
             { onConflict: ["room_id", "user_id"] }
           );
@@ -202,11 +224,21 @@ export const InvitationNotification = ({ onAccept }: Props) => {
         .update({ status: accept ? "accepted" : "declined" })
         .eq("id", inv.id);
 
-      setInvites((p) => p.filter((x) => x.id !== inv.id));
+      setInvites((prev) => prev.filter((x) => x.id !== inv.id));
 
-      accept
-        ? (toast.success("Joined room"), onAccept(inv.room_id))
-        : toast.info("Invite declined");
+      if (accept) {
+        toast.success("Joined room");
+        onAccept(inv.room_id);
+
+        // 🔥 GLOBAL SYNC (CollaborationRoom listens to this)
+        window.dispatchEvent(
+          new CustomEvent("collaboration:joined", {
+            detail: { roomId: inv.room_id },
+          })
+        );
+      } else {
+        toast.info("Invite declined");
+      }
     } catch (err: any) {
       toast.error(err?.message || "Action failed");
     } finally {

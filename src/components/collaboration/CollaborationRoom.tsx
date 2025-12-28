@@ -45,17 +45,12 @@ const InviteModal = ({ open, onClose, onSend, loading }) => {
         />
 
         <div className="flex gap-2 justify-end">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            className="bg-white/80 text-[#4A382C]"
-          >
+          <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button
             onClick={() => onSend(email)}
             disabled={!email.trim() || loading}
-            className="bg-[#6A4A3C] text-white"
           >
             {loading ? "Sending..." : "Send Invite"}
           </Button>
@@ -103,18 +98,13 @@ const NotificationDropdown = ({
               </p>
 
               <div className="flex gap-2 mt-2">
-                <Button
-                  size="sm"
-                  onClick={() => onAccept(inv)}
-                  className="bg-[#6A4A3C] text-white px-3 py-1"
-                >
+                <Button size="sm" onClick={() => onAccept(inv)}>
                   Accept
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => onDecline(inv)}
-                  className="bg-white px-3 py-1 text-[#4A382C]"
                 >
                   Decline
                 </Button>
@@ -127,11 +117,12 @@ const NotificationDropdown = ({
   );
 };
 
-/* ---------------------- MAIN COMPONENT ---------------------- */
+/* ---------------------- MAIN ---------------------- */
 export const CollaborationRoom = ({ roomId, username, onLeave }) => {
   const [members, setMembers] = useState([]);
   const [roomInfo, setRoomInfo] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState(new Set());
+
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUserEmail, setCurrentUserEmail] = useState(null);
 
@@ -142,24 +133,19 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef(null);
 
-  /* ------------------ FETCH MEMBERS ------------------ */
+  /* ------------------ MEMBERS ------------------ */
   const fetchMembers = async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("collaboration_members")
       .select("*")
       .eq("room_id", roomId);
 
-    if (error) {
-      console.error("fetchMembers error:", error);
-      return;
-    }
-
     setMembers(data || []);
   };
 
-  /* ------------------ Initial Load ------------------ */
+  /* ------------------ INIT ------------------ */
   useEffect(() => {
-    const load = async () => {
+    const init = async () => {
       const { data: auth } = await supabase.auth.getUser();
       if (!auth?.user) return;
 
@@ -167,13 +153,11 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("email, full_name")
+        .select("email")
         .eq("id", auth.user.id)
         .single();
 
-      if (profile?.email) {
-        setCurrentUserEmail(profile.email.toLowerCase());
-      }
+      setCurrentUserEmail(profile?.email?.toLowerCase() || null);
 
       const { data: room } = await supabase
         .from("collaboration_rooms")
@@ -185,48 +169,23 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
       fetchMembers();
     };
 
-    load();
+    init();
   }, [roomId]);
 
-  /* ------------------ REALTIME MEMBERS LISTENER ------------------ */
+  /* ------------------ INVITES (LOAD + REALTIME) ------------------ */
   useEffect(() => {
-    if (!roomId) return;
+    if (!currentUserId && !currentUserEmail) return;
 
-    const channel = supabase
-      .channel(`members-room-${roomId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "collaboration_members",
-          filter: `room_id=eq.${roomId}`,
-        },
-        () => {
-          fetchMembers();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [roomId]);
-
-  /* ------------------ Load Pending Invites ------------------ */
-  useEffect(() => {
-    if (!currentUserEmail && !currentUserId) return;
-
-    const loadPending = async () => {
+    const load = async () => {
       const { data } = await supabase
         .from("collaboration_invitations")
         .select("*")
         .or(
-          `and(invitee_email.eq.${currentUserEmail},status.eq.pending),
-           and(invitee_id.eq.${currentUserId},status.eq.pending)`
-        );
+          `invitee_id.eq.${currentUserId},invitee_email.eq.${currentUserEmail}`
+        )
+        .eq("status", "pending");
 
-      if (!data || data.length === 0) return;
+      if (!data) return;
 
       const mapped = await Promise.all(
         data.map(async (inv) => {
@@ -254,22 +213,13 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
         })
       );
 
-      setInvites((prev) => {
-        const ids = new Set(prev.map((i) => i.id));
-        const unique = mapped.filter((d) => !ids.has(d.id));
-        return [...unique, ...prev];
-      });
+      setInvites(mapped);
     };
 
-    loadPending();
-  }, [currentUserEmail, currentUserId]);
+    load();
 
-  /* ------------------ Realtime Invite Listener ------------------ */
-  useEffect(() => {
-    if (!currentUserEmail) return;
-
-    const insert = supabase
-      .channel("invite-insert")
+    const channel = supabase
+      .channel(`invite-${currentUserId}`)
       .on(
         "postgres_changes",
         {
@@ -277,112 +227,102 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
           schema: "public",
           table: "collaboration_invitations",
         },
-        async (payload) => {
+        (payload) => {
           const inv = payload.new;
-
-          const emailMatch =
-            inv.invitee_email &&
-            inv.invitee_email.toLowerCase() === currentUserEmail;
-
-          const idMatch =
-            inv.invitee_id &&
-            String(inv.invitee_id) === String(currentUserId);
-
-          if (!emailMatch && !idMatch) return;
-
-          const [{ data: room }, { data: inviter }] = await Promise.all([
-            supabase
-              .from("collaboration_rooms")
-              .select("name")
-              .eq("id", inv.room_id)
-              .single(),
-            supabase
-              .from("profiles")
-              .select("full_name,email")
-              .eq("id", inv.inviter_id)
-              .single(),
-          ]);
-
-          const inviteObj = {
-            ...inv,
-            room_name: room?.name || "Room",
-            inviter_name:
-              inviter?.full_name ||
-              inviter?.email?.split("@")[0] ||
-              "Someone",
-          };
-
-          setInvites((prev) =>
-            prev.some((p) => p.id === inviteObj.id)
-              ? prev
-              : [inviteObj, ...prev]
-          );
-
-          toast.info("New collaboration invite");
+          if (
+            inv.invitee_id === currentUserId ||
+            inv.invitee_email?.toLowerCase() === currentUserEmail
+          ) {
+            load();
+            toast.info("New collaboration invite");
+          }
         }
       )
       .subscribe();
 
-    return () => insert.unsubscribe();
-  }, [currentUserEmail, currentUserId]);
+    return () => supabase.removeChannel(channel);
+  }, [currentUserId, currentUserEmail]);
 
-  /* ------------------ Send Invite ------------------ */
+  /* ------------------ PRESENCE ------------------ */
+  useEffect(() => {
+    if (!roomId || !currentUserId) return;
+
+    const channel = supabase.channel(`presence-${roomId}`, {
+      config: { presence: { key: currentUserId } },
+    });
+
+    channel
+      .on("presence", { event: "sync" }, () => {
+        setOnlineUsers(new Set(Object.keys(channel.presenceState())));
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await channel.track({ user_id: currentUserId });
+        }
+      });
+
+    return () => supabase.removeChannel(channel);
+  }, [roomId, currentUserId]);
+
+  /* ------------------ MEMBERS REALTIME ------------------ */
+  useEffect(() => {
+    const ch = supabase
+      .channel(`members-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "collaboration_members",
+          filter: `room_id=eq.${roomId}`,
+        },
+        fetchMembers
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(ch);
+  }, [roomId]);
+
+  /* ------------------ INVITE ACTIONS ------------------ */
   const sendInvite = async (email) => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed) return toast.error("Enter email");
-
     setInviteLoading(true);
-
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-
-      const payload = {
-        room_id: roomId,
-        inviter_id: auth.user.id,
-        invitee_email: trimmed,
-        status: "pending",
-        created_at: new Date().toISOString(),
-      };
-
-      await supabase.from("collaboration_invitations").insert(payload);
-
-      toast.success(`Invite sent to ${trimmed}`);
-      setInviteOpen(false);
-    } catch (e) {
-      toast.error("Failed to send invite");
-    }
-
+    await supabase.from("collaboration_invitations").insert({
+      room_id: roomId,
+      inviter_id: currentUserId,
+      invitee_email: email.toLowerCase(),
+      status: "pending",
+    });
     setInviteLoading(false);
+    setInviteOpen(false);
+    toast.success("Invite sent");
   };
 
-  /* ------------------ Accept / Decline ------------------ */
   const acceptInvite = async (inv) => {
-    const { data: auth } = await supabase.auth.getUser();
-
-    const { error } = await supabase
-      .from("collaboration_members")
-      .upsert(
-        {
-          room_id: inv.room_id,
-          user_id: auth.user.id,
-          username,
-          joined_at: new Date().toISOString(),
-        },
-        { onConflict: ["room_id", "user_id"] }
-      );
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
+    await supabase.from("collaboration_members").upsert(
+      {
+        room_id: inv.room_id,
+        user_id: currentUserId,
+        username,
+        joined_at: new Date().toISOString(),
+      },
+      { onConflict: ["room_id", "user_id"] }
+    );
 
     await supabase
       .from("collaboration_invitations")
       .update({ status: "accepted" })
       .eq("id", inv.id);
 
-    setInvites((prev) => prev.filter((x) => x.id !== inv.id));
-    toast.success("Joined the room");
+    setInvites((p) => p.filter((i) => i.id !== inv.id));
+    fetchMembers();
+
+    window.dispatchEvent(
+      new CustomEvent("collaboration:joined", {
+        detail: { roomId: inv.room_id },
+      })
+    );
+
+    toast.success("Joined room");
   };
 
   const declineInvite = async (inv) => {
@@ -391,41 +331,13 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
       .update({ status: "declined" })
       .eq("id", inv.id);
 
-    setInvites((prev) => prev.filter((x) => x.id !== inv.id));
-    toast.info("Declined");
+    setInvites((p) => p.filter((i) => i.id !== inv.id));
   };
-
-  /* ------------------ Leave Room ------------------ */
-  const handleLeave = async () => {
-    const { data: auth } = await supabase.auth.getUser();
-
-    await supabase
-      .from("collaboration_members")
-      .delete()
-      .eq("room_id", roomId)
-      .eq("user_id", auth.user.id);
-
-    toast.success("Left the room");
-    onLeave && onLeave();
-  };
-
-  /* ------------------ Click Outside Notification ------------------ */
-  useEffect(() => {
-    const handler = (e) => {
-      if (notifRef.current && !notifRef.current.contains(e.target)) {
-        setNotifOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   const mergedMembers = members.map((m) => ({
     ...m,
-    isOnline: onlineUsers.has(m.username),
+    isOnline: onlineUsers.has(String(m.user_id)),
   }));
-
-  const onlineCount = mergedMembers.filter((m) => m.isOnline).length;
 
   /* ------------------ UI ------------------ */
   return (
@@ -439,13 +351,12 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
 
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#CBBBAA] bg-gradient-to-r from-[#3A251C] via-[#4A2F23] to-[#2A1A14] text-[#EBD8C8]">
         <div className="flex items-center gap-4">
-          <div className="p-2.5 rounded-xl bg-[#4A2F23] border border-[#C7A583]/40">
-            <Users className="h-5 w-5" />
-          </div>
+          <Users className="h-5 w-5" />
           <div>
             <h2 className="text-lg font-semibold">{roomInfo?.name}</h2>
             <div className="text-xs">
-              {onlineCount} online • {members.length} members
+              {mergedMembers.filter((m) => m.isOnline).length} online •{" "}
+              {members.length} members
             </div>
           </div>
         </div>
@@ -475,7 +386,7 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
             <UserPlus className="h-4 w-4" /> Invite
           </Button>
 
-          <Button size="sm" onClick={handleLeave}>
+          <Button size="sm" onClick={onLeave}>
             <LogOut className="h-4 w-4 mr-2" /> Leave
           </Button>
         </div>
@@ -490,13 +401,13 @@ export const CollaborationRoom = ({ roomId, username, onLeave }) => {
           />
         </ResizablePanel>
 
-        <ResizableHandle withHandle />
+        <ResizableHandle />
 
         <ResizablePanel defaultSize={50}>
           <GroupChat roomId={roomId} username={username} />
         </ResizablePanel>
 
-        <ResizableHandle withHandle />
+        <ResizableHandle />
 
         <ResizablePanel defaultSize={32}>
           <SharedOutputPanel roomId={roomId} username={username} />
